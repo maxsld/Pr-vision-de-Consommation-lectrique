@@ -1,11 +1,17 @@
 """Exploratory data analysis utilities for household power consumption."""
 
 from pathlib import Path
+import sys
 from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import pandas as pd
 from statsmodels.tsa.seasonal import seasonal_decompose
+
+# Allow running this module directly from anywhere
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from src.data_processing import (
     add_lag_features,
@@ -527,6 +533,41 @@ def run_eda(
             show=show,
         )
         corr_df.corr().to_csv(results_dir / "eda_corr_matrix.csv")
+
+    # Additional correlation matrices (focused subsets)
+    corr_configs = [
+        {
+            "name": "calendar_only",
+            "title": "Corrélation calendrier",
+            "cols": ["hour", "dayofweek", "month", "is_weekend", "is_holiday", "hour_sin", "hour_cos", "dayofweek_sin", "dayofweek_cos"],
+        },
+        {
+            "name": "lags_rollings",
+            "title": "Corrélation lags/rolling",
+            "cols": ["Global_active_power", "Global_active_power_rollmean_24h"] + [c for c in hourly_feat.columns if "lag" in c or "rollmean" in c],
+        },
+        {
+            "name": "full_consumption_weather",
+            "title": "Corrélation consommation + météo",
+            "cols": corr_cols + [c for c in ["temperature_degC"] if c in hourly_feat.columns],
+        },
+    ]
+
+    for cfg in corr_configs:
+        cols = [c for c in cfg["cols"] if c in hourly_feat.columns]
+        if len(cols) < 2:
+            continue
+        df_corr = hourly_feat[cols].dropna()
+        if df_corr.empty:
+            continue
+        plot_correlation_matrix(
+            df_corr,
+            cols,
+            title=cfg["title"],
+            outfile=results_dir / f"eda_corr_{cfg['name']}.png",
+            show=show,
+        )
+        df_corr.corr().to_csv(results_dir / f"eda_corr_{cfg['name']}.csv")
 
 
 if __name__ == "__main__":
