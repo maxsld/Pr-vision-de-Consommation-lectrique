@@ -16,8 +16,8 @@ if str(REPO_ROOT) not in sys.path:
 from src.data_processing import (
     add_lag_features,
     add_time_features,
+    load_consumption_data,
     load_opsd_weather,
-    load_uci_household,
     merge_weather_features,
     preprocess_household_hourly,
 )
@@ -251,7 +251,7 @@ def plot_correlation_matrix(
 
 
 def run_eda(
-    data_path: Path = Path("data/household_power_consumption.txt"),
+    data_path: Path = Path("data/consumption_data.csv"),
     results_dir: Path = Path("results"),
     show: bool = True,
     weather_path: Path | None = None,
@@ -269,17 +269,17 @@ def run_eda(
     if not data_path.exists():
         raise FileNotFoundError(f"Data file not found: {data_path}")
 
-    raw = load_uci_household(str(data_path))
+    raw = load_consumption_data(str(data_path))
     hourly = preprocess_household_hourly(raw)
     hourly_feat = add_time_features(hourly)
     hourly_feat = add_lag_features(
         hourly_feat,
-        target_col="Global_active_power",
+        target_col="load",
         lags=(),
         rolling_windows=(24,),
         dropna=True,
     )
-    cons = hourly_feat["Global_active_power"].rename("load_kw")
+    cons = hourly_feat["load"].rename("load_kw")
 
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -513,12 +513,12 @@ def run_eda(
 
     # Correlation matrix (cons, calendar, rolling, temp if available)
     corr_cols = [
-        "Global_active_power",
+        "load",
         "hour",
         "dayofweek",
         "month",
         "is_weekend",
-        "Global_active_power_rollmean_24h",
+        "load_rollmean_24h",
     ]
     if temp is not None and "temperature_degC" in hourly_feat.columns:
         corr_cols.append("temperature_degC")
@@ -544,7 +544,7 @@ def run_eda(
         {
             "name": "lags_rollings",
             "title": "Corrélation lags/rolling",
-            "cols": ["Global_active_power", "Global_active_power_rollmean_24h"] + [c for c in hourly_feat.columns if "lag" in c or "rollmean" in c],
+            "cols": ["load", "load_rollmean_24h"] + [c for c in hourly_feat.columns if "lag" in c or "rollmean" in c],
         },
         {
             "name": "full_consumption_weather",

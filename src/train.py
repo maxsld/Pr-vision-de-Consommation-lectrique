@@ -14,14 +14,14 @@ if str(REPO_ROOT) not in sys.path:
 from src.data_processing import (  # noqa: E402
     add_lag_features,
     add_time_features,
+    load_consumption_data,
     load_opsd_weather,
-    load_uci_household,
     merge_weather_features,
     preprocess_household_hourly,
 )
 from src.utils import scale_splits, temporal_split  # noqa: E402
 
-TARGET_COL = "Global_active_power"
+TARGET_COL = "load"
 
 
 def make_sequences(
@@ -65,7 +65,7 @@ def process_data(
     val_end: str = "2009-12-31",
 ):
     """Load, preprocess, add features, split, and scale. Returns scaled splits and feature list."""
-    raw = load_uci_household(str(data_path))
+    raw = load_consumption_data(str(data_path))
     hourly = preprocess_household_hourly(raw)
 
     # Feature engineering: calendar/cyclic + lags + rolling means
@@ -100,7 +100,7 @@ def process_data(
 
 
 def main() -> None:
-    data_path = REPO_ROOT / "data" / "household_power_consumption.txt"
+    data_path = REPO_ROOT / "data" / "consumption_data.csv"
     weather_candidates = [
         REPO_ROOT / "data" / "weather.csv",
         REPO_ROOT / "data" / "weather_opsd.csv",

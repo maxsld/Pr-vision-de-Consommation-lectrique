@@ -8,6 +8,7 @@ import pandas as pd
 UCI_SUB_METERING_PREFIX = "Sub_metering"
 
 __all__ = [
+    "load_consumption_data",
     "load_uci_household",
     "preprocess_household_hourly",
     "add_time_features",
@@ -18,28 +19,70 @@ __all__ = [
 ]
 
 
-def load_uci_household(path: str) -> pd.DataFrame:
+def load_consumption_data(
+    path: str,
+    load_column: Optional[str] = None,
+    country: str = "FR",
+    timestamp_column: Optional[str] = None,
+) -> pd.DataFrame:
     """
-    Load the UCI Household Power Consumption dataset.
+    Load consumption dataset (UCI legacy or OPSD time series) and return a DataFrame indexed by datetime with a single
+    column named 'load'.
 
-    Expects the raw text file with ';' separator and Date/Time columns.
+    - If Date/Time columns are present (UCI format), they are merged.
+    - If utc/cet timestamps are present (OPSD), parses them and selects a load column.
     """
-    df = pd.read_csv(
-        path,
-        sep=";",
-        na_values="?",
-        low_memory=False,
-    )
-    # Combine Date and Time explicitly to avoid parsing warnings
-    df["datetime"] = pd.to_datetime(
-        df["Date"] + " " + df["Time"],
-        format="%d/%m/%Y %H:%M:%S",
-        dayfirst=True,
-        errors="coerce",
-    )
-    df = df.drop(columns=["Date", "Time"])
-    df = df.set_index("datetime").sort_index()
-    return df
+    df = pd.read_csv(path, sep=";", na_values="?", low_memory=False)
+    if df.shape[1] == 1:
+        df = pd.read_csv(path, na_values="?", low_memory=False)
+
+    # Legacy UCI format: Date + Time columns
+    if "Date" in df.columns and "Time" in df.columns:
+        df["datetime"] = pd.to_datetime(
+            df["Date"] + " " + df["Time"],
+            format="%d/%m/%Y %H:%M:%S",
+            dayfirst=True,
+            errors="coerce",
+        )
+        df = df.drop(columns=["Date", "Time"])
+        df = df.set_index("datetime").sort_index()
+        target_col = load_column or "Global_active_power"
+        if target_col not in df.columns:
+            raise ValueError(f"Target column '{target_col}' not found in UCI dataset.")
+        df = df.rename(columns={target_col: "load"})
+        return df
+
+    # OPSD format: look for timestamp column
+    if timestamp_column is None:
+        ts_candidates = [c for c in df.columns if "timestamp" in c.lower()]
+        if not ts_candidates:
+            raise ValueError("No timestamp column found in dataset.")
+        timestamp_column = ts_candidates[0]
+
+    df[timestamp_column] = pd.to_datetime(df[timestamp_column], errors="coerce", utc=True)
+    df = df.dropna(subset=[timestamp_column])
+    df = df.set_index(timestamp_column).sort_index()
+    df.index = df.index.tz_convert(None)
+
+    if load_column is None:
+        preferred = [
+            f"{country}_load_actual_entsoe_transparency",
+            f"{country}_load_actual",
+            f"{country}_load_forecast_entsoe_transparency",
+        ]
+        load_column = next((c for c in preferred if c in df.columns), None)
+        if load_column is None:
+            load_column = next((c for c in df.columns if "load_actual" in c), None)
+    if load_column is None or load_column not in df.columns:
+        raise ValueError("No suitable load column found in dataset; specify load_column explicitly.")
+
+    out = df[[load_column]].rename(columns={load_column: "load"})
+    return out
+
+
+def load_uci_household(path: str) -> pd.DataFrame:
+    """Backwards compatibility wrapper."""
+    return load_consumption_data(path)
 
 
 def preprocess_household_hourly(

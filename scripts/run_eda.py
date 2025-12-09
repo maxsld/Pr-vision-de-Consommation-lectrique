@@ -12,7 +12,7 @@ from src.eda import run_eda
 
 
 if __name__ == "__main__":
-    data_path = REPO_ROOT / "data" / "household_power_consumption.txt"
+    data_path = REPO_ROOT / "data" / "consumption_data.csv"
     results_dir = REPO_ROOT / "results"
     # Try to locate a weather file if present
     weather_candidates = [

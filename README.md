@@ -11,8 +11,8 @@ Projet de prévision de la consommation électrique horaire à 24h pour optimise
 - `results/` : artefacts de modèles, graphiques, métriques (ignorés par git).
 
 ## Données
-- UCI Individual Household Electric Power Consumption (`data/household_power_consumption.txt`), résolution minute (2006-2010), à agréger à l’heure pour la modélisation.
-- Option recommandée : OPSD Time Series (load, wind, solar, price, horaire). À télécharger via `scripts/download_data.py` ou manuellement puis placer sous `data/`.
+- OPSD Time Series (charge/énergie, horaire) téléchargée sous `data/consumption_data.csv`. Dataset brut à filtrer/adapter selon le pays ciblé.
+- Les dossiers `data/` et `results/` sont ignorés par git ; prévois du stockage local suffisant.
 - Les dossiers `data/` et `results/` sont ignorés par git ; prévois du stockage local suffisant.
 
 ## Installation
