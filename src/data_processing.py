@@ -261,7 +261,7 @@ def load_opsd_weather(
 
 def split_time_series(
     df: pd.DataFrame,
-    train_end: str,
+    train_end: Optional[str] = None,
     val_end: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
@@ -273,7 +273,7 @@ def split_time_series(
         val_end: last timestamp for the validation set (inclusive).
                  If None, split 70/15/15 by proportion.
     """
-    if val_end is None:
+    if val_end is None or train_end is None:
         n = len(df)
         train_cut = int(n * 0.7)
         val_cut = int(n * 0.85)
@@ -288,4 +288,13 @@ def split_time_series(
     train = df[df.index <= train_boundary]
     val = df[(df.index > train_boundary) & (df.index <= val_boundary)]
     test = df[df.index > val_boundary]
+
+    # Fallback to proportional split if any segment is empty
+    if len(train) == 0 or len(val) == 0 or len(test) == 0:
+        n = len(df)
+        train_cut = int(n * 0.7)
+        val_cut = int(n * 0.85)
+        train = df.iloc[:train_cut]
+        val = df.iloc[train_cut:val_cut]
+        test = df.iloc[val_cut:]
     return train, val, test
