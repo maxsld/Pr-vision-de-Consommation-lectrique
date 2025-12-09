@@ -1,16 +1,18 @@
-"""Data loading and preprocessing utilities for UCI household power consumption."""
+"""Data loading, preprocessing, and feature engineering utilities."""
 
 from typing import Optional, Tuple
 
+import numpy as np
 import pandas as pd
-
 
 UCI_SUB_METERING_PREFIX = "Sub_metering"
 
 __all__ = [
     "load_uci_household",
     "preprocess_household_hourly",
+    "add_time_features",
     "split_time_series",
+    "load_opsd_weather",
 ]
 
 
@@ -25,16 +27,22 @@ def load_uci_household(path: str) -> pd.DataFrame:
         sep=";",
         na_values="?",
         low_memory=False,
-        parse_dates={"datetime": ["Date", "Time"]},
-        infer_datetime_format=True,
     )
+    # Combine Date and Time explicitly to avoid parsing warnings
+    df["datetime"] = pd.to_datetime(
+        df["Date"] + " " + df["Time"],
+        format="%d/%m/%Y %H:%M:%S",
+        dayfirst=True,
+        errors="coerce",
+    )
+    df = df.drop(columns=["Date", "Time"])
     df = df.set_index("datetime").sort_index()
     return df
 
 
 def preprocess_household_hourly(
     df: pd.DataFrame,
-    resample_rule: str = "1H",
+    resample_rule: str = "1h",
     max_missing_ratio: float = 0.5,
     ffill_limit: int = 2,
     bfill_limit: int = 1,
@@ -67,6 +75,83 @@ def preprocess_household_hourly(
     hourly = hourly[missing_ratio <= max_missing_ratio]
     hourly = hourly.dropna()
     return hourly
+
+
+def add_time_features(df: pd.DataFrame, holidays_country: Optional[str] = "FR") -> pd.DataFrame:
+    """
+    Add calendar and cyclic time features (hour, dow, month, weekend, holiday, sin/cos hour).
+
+    - hour, dayofweek, month
+    - is_weekend, is_holiday (if holidays package is available)
+    - hour_sin, hour_cos (cyclic encoding)
+    """
+    if not isinstance(df.index, pd.DatetimeIndex):
+        raise ValueError("DataFrame index must be a DatetimeIndex to add time features.")
+
+    out = df.copy()
+    idx = out.index
+
+    out["hour"] = idx.hour
+    out["dayofweek"] = idx.dayofweek
+    out["month"] = idx.month
+    out["is_weekend"] = out["dayofweek"] >= 5
+
+    if holidays_country:
+        try:
+            import holidays  # type: ignore
+
+            holiday_calendar = holidays.country_holidays(holidays_country)
+            out["is_holiday"] = idx.normalize().isin(holiday_calendar)
+        except Exception:
+            out["is_holiday"] = False
+    else:
+        out["is_holiday"] = False
+
+    out["hour_sin"] = np.sin(2 * np.pi * out["hour"] / 24)
+    out["hour_cos"] = np.cos(2 * np.pi * out["hour"] / 24)
+    return out
+
+
+def load_opsd_weather(
+    path: str,
+    datetime_col: Optional[str] = None,
+    temperature_col: Optional[str] = None,
+    resample_rule: str = "1h",
+) -> pd.Series:
+    """
+    Load OPSD aggregated weather data and return an hourly temperature series.
+
+    Args:
+        path: CSV path.
+        datetime_col: name of the datetime column (auto-detects if None).
+        temperature_col: name of the temperature column (auto-detects if None, looks for 'temp').
+        resample_rule: resampling rule (default 1h).
+    """
+    df = pd.read_csv(path, low_memory=False)
+
+    if datetime_col is None:
+        candidates = [c for c in df.columns if "time" in c.lower()]
+        if not candidates:
+            datetime_col = df.columns[0]
+        else:
+            datetime_col = candidates[0]
+    if datetime_col not in df.columns:
+        raise ValueError(f"Datetime column '{datetime_col}' not found in weather data.")
+
+    df[datetime_col] = pd.to_datetime(df[datetime_col], errors="coerce")
+    df = df.set_index(datetime_col).sort_index()
+
+    if temperature_col is None:
+        temp_candidates = [c for c in df.columns if "temp" in c.lower()]
+        if not temp_candidates:
+            raise ValueError("No temperature column found (searched for substring 'temp').")
+        temperature_col = temp_candidates[0]
+    if temperature_col not in df.columns:
+        raise ValueError(f"Temperature column '{temperature_col}' not found in weather data.")
+
+    temp = pd.to_numeric(df[temperature_col], errors="coerce")
+    temp = temp.resample(resample_rule).mean()
+    return temp.rename("temperature")
 
 
 def split_time_series(
