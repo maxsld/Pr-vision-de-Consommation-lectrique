@@ -161,6 +161,12 @@ def merge_weather_features(
     """
     if weather.name is None:
         weather = weather.rename(suffix)
+    # Align timezone awareness (drop tz info to match consumption which is naive)
+    if getattr(weather.index, "tz", None) is not None:
+        weather.index = weather.index.tz_convert(None)
+    if getattr(df.index, "tz", None) is not None:
+        df = df.copy()
+        df.index = df.index.tz_convert(None)
     joined = df.join(weather, how=how)
     return joined
 
@@ -203,6 +209,9 @@ def load_opsd_weather(
         raise ValueError(f"Temperature column '{temperature_col}' not found in weather data.")
 
     temp = pd.to_numeric(df[temperature_col], errors="coerce")
+    # Drop timezone if present
+    if getattr(temp.index, "tz", None) is not None:
+        temp.index = temp.index.tz_convert(None)
     temp = temp.resample(resample_rule).mean()
     return temp.rename("temperature")
 

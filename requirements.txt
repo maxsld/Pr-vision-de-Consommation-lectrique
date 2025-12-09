@@ -3,3 +3,4 @@ numpy>=1.24
 matplotlib>=3.7
 holidays>=0.36
 statsmodels>=0.14
+scikit-learn>=1.3

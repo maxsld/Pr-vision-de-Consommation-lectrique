@@ -8,8 +8,11 @@ import pandas as pd
 from statsmodels.tsa.seasonal import seasonal_decompose
 
 from src.data_processing import (
+    add_lag_features,
+    add_time_features,
     load_opsd_weather,
     load_uci_household,
+    merge_weather_features,
     preprocess_household_hourly,
 )
 
@@ -32,6 +35,7 @@ __all__ = [
     "plot_box_by",
     "compute_basic_stats",
     "plot_decomposition",
+    "plot_correlation_matrix",
 ]
 
 
@@ -216,6 +220,30 @@ def plot_decomposition(
     _finalize(fig, outfile, show)
 
 
+def plot_correlation_matrix(
+    df: pd.DataFrame,
+    columns: List[str],
+    title: str,
+    outfile: Path | None = None,
+    show: bool = True,
+) -> None:
+    """Plot a correlation matrix for selected columns."""
+    corr = df[columns].corr()
+    fig, ax = plt.subplots(figsize=(8, 6))
+    cax = ax.imshow(corr, cmap="coolwarm", vmin=-1, vmax=1)
+    ax.set_xticks(range(len(columns)))
+    ax.set_yticks(range(len(columns)))
+    ax.set_xticklabels(columns, rotation=45, ha="right")
+    ax.set_yticklabels(columns)
+    ax.set_title(title)
+    fig.colorbar(cax, ax=ax, fraction=0.046, pad=0.04)
+    # Annotate values
+    for i in range(len(columns)):
+        for j in range(len(columns)):
+            ax.text(j, i, f"{corr.iat[i, j]:.2f}", ha="center", va="center", color="black", fontsize=8)
+    _finalize(fig, outfile, show)
+
+
 def run_eda(
     data_path: Path = Path("data/household_power_consumption.txt"),
     results_dir: Path = Path("results"),
@@ -237,7 +265,15 @@ def run_eda(
 
     raw = load_uci_household(str(data_path))
     hourly = preprocess_household_hourly(raw)
-    cons = hourly["Global_active_power"].rename("load_kw")
+    hourly_feat = add_time_features(hourly)
+    hourly_feat = add_lag_features(
+        hourly_feat,
+        target_col="Global_active_power",
+        lags=(),
+        rolling_windows=(24,),
+        dropna=True,
+    )
+    cons = hourly_feat["Global_active_power"].rename("load_kw")
 
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -357,10 +393,11 @@ def run_eda(
         show=show,
     )
 
-    # Optional weather EDA
+    # Optional weather EDA and merge
     if weather_path and Path(weather_path).exists():
         temp = load_opsd_weather(str(weather_path))
         temp = temp.rename("temperature_degC")
+        hourly_feat = merge_weather_features(hourly_feat, temp)
         compute_basic_stats(temp, results_dir / "eda_stats_weather.csv")
         plot_histogram(
             temp,
@@ -465,6 +502,31 @@ def run_eda(
             outfile=results_dir / "eda_weather_decomp_daily.png",
             show=show,
         )
+    else:
+        temp = None
+
+    # Correlation matrix (cons, calendar, rolling, temp if available)
+    corr_cols = [
+        "Global_active_power",
+        "hour",
+        "dayofweek",
+        "month",
+        "is_weekend",
+        "Global_active_power_rollmean_24h",
+    ]
+    if temp is not None and "temperature_degC" in hourly_feat.columns:
+        corr_cols.append("temperature_degC")
+    corr_cols = [c for c in corr_cols if c in hourly_feat.columns]
+    if corr_cols:
+        corr_df = hourly_feat[corr_cols].dropna()
+        plot_correlation_matrix(
+            corr_df,
+            corr_cols,
+            title="Matrice de corrélation (consommation + calendrier + météo)",
+            outfile=results_dir / "eda_corr_matrix.png",
+            show=show,
+        )
+        corr_df.corr().to_csv(results_dir / "eda_corr_matrix.csv")
 
 
 if __name__ == "__main__":
