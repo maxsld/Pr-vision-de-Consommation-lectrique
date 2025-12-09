@@ -1,10 +1,11 @@
 """Exploratory data analysis utilities for household power consumption."""
 
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import pandas as pd
+from statsmodels.tsa.seasonal import seasonal_decompose
 
 from src.data_processing import (
     load_opsd_weather,
@@ -22,7 +23,16 @@ DEFAULT_WINDOWS: Dict[str, Tuple[str, str]] = {
     "ete_2010": ("2010-07-01", "2010-08-31"),
 }
 
-__all__ = ["run_eda", "plot_window", "plot_global_daily", "plot_hourly_profiles"]
+__all__ = [
+    "run_eda",
+    "plot_window",
+    "plot_global_daily",
+    "plot_hourly_profiles",
+    "plot_histogram",
+    "plot_box_by",
+    "compute_basic_stats",
+    "plot_decomposition",
+]
 
 
 def _finalize(fig: plt.Figure, outfile: Path | None, show: bool) -> None:
@@ -123,6 +133,89 @@ def plot_monthly(
     _finalize(fig, outfile, show)
 
 
+def compute_basic_stats(series: pd.Series, outfile: Path | None = None) -> pd.Series:
+    """Compute basic statistics (mean, median, min, max, quantiles). Optionally save to CSV."""
+    stats = {
+        "mean": series.mean(),
+        "median": series.median(),
+        "min": series.min(),
+        "max": series.max(),
+    }
+    quantiles = series.quantile([0.05, 0.25, 0.5, 0.75, 0.95])
+    quantiles.index = [f"quantile_{int(q * 100)}" for q in quantiles.index]
+    stats_series = pd.concat([pd.Series(stats), quantiles])
+    if outfile:
+        outfile.parent.mkdir(parents=True, exist_ok=True)
+        stats_series.to_csv(outfile, header=["value"])
+    return stats_series
+
+
+def plot_histogram(
+    series: pd.Series,
+    title: str,
+    xlabel: str,
+    ylabel: str = "Fréquence",
+    outfile: Path | None = None,
+    show: bool = True,
+    bins: int = 50,
+    color: str = "tab:purple",
+) -> None:
+    """Plot histogram of the target variable."""
+    fig, ax = plt.subplots(figsize=(10, 4))
+    series.dropna().plot(kind="hist", bins=bins, ax=ax, color=color, edgecolor="black")
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    _finalize(fig, outfile, show)
+
+
+def plot_box_by(
+    series: pd.Series,
+    groups: List[int],
+    labels: List[str] | None,
+    title: str,
+    ylabel: str,
+    outfile: Path | None = None,
+    show: bool = True,
+) -> None:
+    """Plot boxplots of the series grouped by a categorical/time bucket."""
+    tmp = pd.DataFrame({"value": series.values, "group": groups})
+    unique_groups = sorted(pd.unique(tmp["group"]))
+    data = [tmp.loc[tmp["group"] == g, "value"].dropna().values for g in unique_groups]
+
+    if labels is None or len(labels) != len(unique_groups):
+        labels = [str(g) for g in unique_groups]
+
+    fig, ax = plt.subplots(figsize=(12, 4))
+    ax.boxplot(data, labels=labels, showfliers=False)
+    ax.set_title(title)
+    ax.set_xlabel("")
+    ax.set_ylabel(ylabel)
+    _finalize(fig, outfile, show)
+
+
+def plot_decomposition(
+    series: pd.Series,
+    period: int,
+    title_prefix: str,
+    outfile: Path | None = None,
+    show: bool = True,
+) -> None:
+    """
+    Seasonal decomposition (trend + seasonal + resid).
+
+    Args:
+        series: time series (DatetimeIndex).
+        period: seasonal period (e.g., 24 for daily seasonality on hourly data).
+        title_prefix: base title for the plot.
+    """
+    decomp = seasonal_decompose(series.dropna(), model="additive", period=period, extrapolate_trend="freq")
+    fig = decomp.plot()
+    fig.set_size_inches(12, 8)
+    fig.suptitle(f"{title_prefix} (période={period})", fontsize=14)
+    _finalize(fig, outfile, show)
+
+
 def run_eda(
     data_path: Path = Path("data/household_power_consumption.txt"),
     results_dir: Path = Path("results"),
@@ -147,6 +240,43 @@ def run_eda(
     cons = hourly["Global_active_power"].rename("load_kw")
 
     results_dir.mkdir(parents=True, exist_ok=True)
+
+    # Basic stats and distributions
+    compute_basic_stats(cons, results_dir / "eda_stats_consumption.csv")
+    plot_histogram(
+        cons,
+        title="Distribution de la consommation (kW)",
+        xlabel="kW",
+        outfile=results_dir / "eda_hist_consumption.png",
+        show=show,
+    )
+    plot_box_by(
+        cons,
+        groups=cons.index.hour.tolist(),
+        labels=[str(h) for h in range(24)],
+        title="Boxplot consommation par heure",
+        ylabel="kW",
+        outfile=results_dir / "eda_box_hour.png",
+        show=show,
+    )
+    plot_box_by(
+        cons,
+        groups=cons.index.dayofweek.tolist(),
+        labels=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"],
+        title="Boxplot consommation par jour de semaine",
+        ylabel="kW",
+        outfile=results_dir / "eda_box_dow.png",
+        show=show,
+    )
+    plot_box_by(
+        cons,
+        groups=cons.index.month.tolist(),
+        labels=[str(m) for m in range(1, 13)],
+        title="Boxplot consommation par mois",
+        ylabel="kW",
+        outfile=results_dir / "eda_box_month.png",
+        show=show,
+    )
 
     plot_global_daily(
         cons,
@@ -211,11 +341,62 @@ def run_eda(
         outfile=results_dir / "eda_mensuel.png",
         show=show,
     )
+    # Decompositions: daily seasonality (24h) and yearly (24*365 approx)
+    plot_decomposition(
+        cons,
+        period=24,
+        title_prefix="Décomposition quotidienne (saisonnalité 24h)",
+        outfile=results_dir / "eda_decomp_daily.png",
+        show=show,
+    )
+    plot_decomposition(
+        cons.resample("D").mean(),
+        period=365,
+        title_prefix="Décomposition annuelle (saisonnalité 365j)",
+        outfile=results_dir / "eda_decomp_yearly.png",
+        show=show,
+    )
 
     # Optional weather EDA
     if weather_path and Path(weather_path).exists():
         temp = load_opsd_weather(str(weather_path))
         temp = temp.rename("temperature_degC")
+        compute_basic_stats(temp, results_dir / "eda_stats_weather.csv")
+        plot_histogram(
+            temp,
+            title="Distribution de la température (°C)",
+            xlabel="°C",
+            outfile=results_dir / "eda_hist_weather.png",
+            show=show,
+            color="tab:red",
+        )
+        plot_box_by(
+            temp,
+            groups=temp.index.hour.tolist(),
+            labels=[str(h) for h in range(24)],
+            title="Boxplot température par heure",
+            ylabel="°C",
+            outfile=results_dir / "eda_weather_box_hour.png",
+            show=show,
+        )
+        plot_box_by(
+            temp,
+            groups=temp.index.dayofweek.tolist(),
+            labels=["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"],
+            title="Boxplot température par jour de semaine",
+            ylabel="°C",
+            outfile=results_dir / "eda_weather_box_dow.png",
+            show=show,
+        )
+        plot_box_by(
+            temp,
+            groups=temp.index.month.tolist(),
+            labels=[str(m) for m in range(1, 13)],
+            title="Boxplot température par mois",
+            ylabel="°C",
+            outfile=results_dir / "eda_weather_box_month.png",
+            show=show,
+        )
         plot_global_daily(
             temp,
             title="Température moyenne quotidienne (°C)",
@@ -276,6 +457,13 @@ def run_eda(
             outfile=results_dir / "eda_weather_mensuel.png",
             show=show,
             color="tab:red",
+        )
+        plot_decomposition(
+            temp,
+            period=24,
+            title_prefix="Décomposition température (24h)",
+            outfile=results_dir / "eda_weather_decomp_daily.png",
+            show=show,
         )
 
 

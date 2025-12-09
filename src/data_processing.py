@@ -1,6 +1,6 @@
 """Data loading, preprocessing, and feature engineering utilities."""
 
-from typing import Optional, Tuple
+from typing import Iterable, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -11,6 +11,8 @@ __all__ = [
     "load_uci_household",
     "preprocess_household_hourly",
     "add_time_features",
+    "add_lag_features",
+    "merge_weather_features",
     "split_time_series",
     "load_opsd_weather",
 ]
@@ -79,11 +81,12 @@ def preprocess_household_hourly(
 
 def add_time_features(df: pd.DataFrame, holidays_country: Optional[str] = "FR") -> pd.DataFrame:
     """
-    Add calendar and cyclic time features (hour, dow, month, weekend, holiday, sin/cos hour).
+    Add calendar and cyclic time features.
 
-    - hour, dayofweek, month
+    - hour (0-23), dayofweek (0-6), month (1-12)
     - is_weekend, is_holiday (if holidays package is available)
     - hour_sin, hour_cos (cyclic encoding)
+    - dayofweek_sin, dayofweek_cos (cyclic encoding)
     """
     if not isinstance(df.index, pd.DatetimeIndex):
         raise ValueError("DataFrame index must be a DatetimeIndex to add time features.")
@@ -109,7 +112,57 @@ def add_time_features(df: pd.DataFrame, holidays_country: Optional[str] = "FR") 
 
     out["hour_sin"] = np.sin(2 * np.pi * out["hour"] / 24)
     out["hour_cos"] = np.cos(2 * np.pi * out["hour"] / 24)
+    out["dayofweek_sin"] = np.sin(2 * np.pi * out["dayofweek"] / 7)
+    out["dayofweek_cos"] = np.cos(2 * np.pi * out["dayofweek"] / 7)
     return out
+
+
+def add_lag_features(
+    df: pd.DataFrame,
+    target_col: str,
+    lags: Sequence[int] = (1, 24),
+    rolling_windows: Sequence[int] = (3, 24),
+    dropna: bool = True,
+) -> pd.DataFrame:
+    """
+    Add lagged targets and rolling means on the target column.
+
+    - Lags: e.g., y(t-1), y(t-24)
+    - Rolling means: e.g., rolling_mean_3h, rolling_mean_24h
+    """
+    out = df.copy()
+    if target_col not in out.columns:
+        raise ValueError(f"Target column '{target_col}' not found in DataFrame.")
+
+    for lag in lags:
+        out[f"{target_col}_lag{lag}"] = out[target_col].shift(lag)
+    for win in rolling_windows:
+        out[f"{target_col}_rollmean_{win}h"] = out[target_col].shift(1).rolling(win, min_periods=win).mean()
+
+    if dropna:
+        out = out.dropna()
+    return out
+
+
+def merge_weather_features(
+    df: pd.DataFrame,
+    weather: pd.Series,
+    how: str = "left",
+    suffix: str = "temp",
+) -> pd.DataFrame:
+    """
+    Merge a weather series (e.g., temperature) onto the main DataFrame by timestamp.
+
+    Args:
+        df: main time-indexed DataFrame.
+        weather: Series indexed by datetime (e.g., temperature).
+        how: join type (default left).
+        suffix: suffix/name used for the weather column if not already named.
+    """
+    if weather.name is None:
+        weather = weather.rename(suffix)
+    joined = df.join(weather, how=how)
+    return joined
 
 
 def load_opsd_weather(
