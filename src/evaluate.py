@@ -23,6 +23,7 @@ __all__ = [
     "rmse",
     "mape",
     "evaluate_forecasts",
+    "sarima_rolling_forecast",
     "baseline_persistence",
     "baseline_previous_day",
     "baseline_moving_average",
@@ -118,34 +119,96 @@ def baseline_sarima(
     seasonal_order: Tuple[int, int, int, int] = (1, 0, 1, 24),
     horizon: int = 24,
     max_points: Optional[int] = None,
+    max_steps: Optional[int] = None,
 ) -> Dict[str, float]:
     """
     Fit SARIMA on train (optionally truncated) and forecast rolling on test horizon-by-horizon.
     Warning: can be slow; use max_points to limit training sample.
     """
+    y_true, y_pred = sarima_rolling_forecast(
+        train_series=train_series,
+        test_series=test_series,
+        order=order,
+        seasonal_order=seasonal_order,
+        horizon=horizon,
+        warm_start=0,
+        max_points=max_points,
+        max_steps=max_steps,
+    )
+    return evaluate_forecasts(y_true, y_pred)
+
+
+def sarima_rolling_forecast(
+    train_series: pd.Series,
+    test_series: pd.Series,
+    *,
+    order: Tuple[int, int, int] = (1, 0, 1),
+    seasonal_order: Tuple[int, int, int, int] = (1, 0, 1, 24),
+    horizon: int = 24,
+    warm_start: int = 0,
+    stride: int = 1,
+    max_points: Optional[int] = None,
+    max_steps: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Rolling multi-step SARIMA forecast.
+
+    Fit once on train, optionally append `warm_start` first test observations (to align with windowed models),
+    then iterate through the test set and forecast `horizon` steps ahead at each origin.
+
+    Notes:
+      - This returns the aligned arrays (y_true, y_pred) with shape (n_samples, horizon).
+      - `max_points` and `max_steps` are optional runtime controls; set to None for full evaluation.
+    """
     train_vals = train_series.values
-    if max_points:
+    if max_points is not None:
         train_vals = train_vals[-max_points:]
-    model = SARIMAX(train_vals, order=order, seasonal_order=seasonal_order, enforce_stationarity=False, enforce_invertibility=False)
-    fit_res = model.fit(disp=False)
+
+    model = SARIMAX(
+        train_vals,
+        order=order,
+        seasonal_order=seasonal_order,
+        enforce_stationarity=False,
+        enforce_invertibility=False,
+    )
+    res = model.fit(disp=False)
+
+    if stride <= 0:
+        raise ValueError("stride must be >= 1")
 
     test_vals = test_series.values
-    samples = len(test_vals) - horizon
-    if samples <= 0:
-        raise ValueError("Test series too short for SARIMA baseline.")
+    if warm_start < 0:
+        raise ValueError("warm_start must be >= 0")
+    if warm_start > 0:
+        if len(test_vals) < warm_start:
+            raise ValueError("Test series too short for warm_start.")
+        # Update the filtered state with the first warm_start observations (no refit)
+        res = res.append(test_vals[:warm_start], refit=False)
 
-    y_true = []
-    y_pred = []
-    history = list(train_vals)
-    for i in range(samples):
-        res = SARIMAX(history, order=order, seasonal_order=seasonal_order, enforce_stationarity=False, enforce_invertibility=False).filter(fit_res.params)
+    samples = len(test_vals) - warm_start - horizon + 1
+    if samples <= 0:
+        raise ValueError("Test series too short for requested horizon/warm_start.")
+
+    # When stride > 1, we evaluate only one forecast every `stride` points (faster),
+    # but still forecast `horizon` steps ahead.
+    steps = (samples + stride - 1) // stride
+    if max_steps is not None:
+        steps = min(steps, max_steps)
+    y_true = np.empty((steps, horizon), dtype=float)
+    y_pred = np.empty((steps, horizon), dtype=float)
+
+    for step_idx in range(steps):
+        i = step_idx * stride
         fc = res.forecast(steps=horizon)
-        y_pred.append(fc)
-        y_true.append(test_vals[i + 1 : i + 1 + horizon])
-        history.append(test_vals[i + 1])
-    y_true = np.stack(y_true, axis=0)
-    y_pred = np.stack(y_pred, axis=0)
-    return evaluate_forecasts(y_true, y_pred)
+        y_pred[step_idx, :] = np.asarray(fc)
+        start = warm_start + i
+        y_true[step_idx, :] = test_vals[start : start + horizon]
+        # Reveal next `stride` observations and advance state (except after last iteration)
+        if step_idx < steps - 1:
+            chunk = test_vals[start : start + stride]
+            res = res.append(chunk, refit=False)
+
+    return y_true, y_pred
 
 
 def run_all_baselines(
